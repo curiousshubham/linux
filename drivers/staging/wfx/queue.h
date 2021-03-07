@@ -2,14 +2,11 @@
 /*
  * O(1) TX queue with built-in allocator.
  *
- * Copyright (c) 2017-2018, Silicon Laboratories, Inc.
+ * Copyright (c) 2017-2020, Silicon Laboratories, Inc.
  * Copyright (c) 2010, ST-Ericsson
  */
 #ifndef WFX_QUEUE_H
 #define WFX_QUEUE_H
-
-#include <linux/skbuff.h>
-#include <linux/atomic.h>
 
 struct wfx_dev;
 struct wfx_vif;
@@ -18,6 +15,7 @@ struct wfx_queue {
 	struct sk_buff_head	normal;
 	struct sk_buff_head	cab; // Content After (DTIM) Beacon
 	atomic_t		pending_frames;
+	int			priority;
 };
 
 void wfx_tx_lock(struct wfx_dev *wdev);

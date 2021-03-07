@@ -2,13 +2,11 @@
 /*
  * Scan related functions.
  *
- * Copyright (c) 2017-2019, Silicon Laboratories, Inc.
+ * Copyright (c) 2017-2020, Silicon Laboratories, Inc.
  * Copyright (c) 2010, ST-Ericsson
  */
 #ifndef WFX_SCAN_H
 #define WFX_SCAN_H
-
-#include <net/mac80211.h>
 
 struct wfx_dev;
 struct wfx_vif;

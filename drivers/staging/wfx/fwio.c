@@ -2,12 +2,10 @@
 /*
  * Firmware loading.
  *
- * Copyright (c) 2017-2019, Silicon Laboratories, Inc.
+ * Copyright (c) 2017-2020, Silicon Laboratories, Inc.
  * Copyright (c) 2010, ST-Ericsson
  */
 #include <linux/firmware.h>
-#include <linux/slab.h>
-#include <linux/mm.h>
 #include <linux/bitfield.h>
 
 #include "fwio.h"
@@ -94,7 +92,7 @@ static int sram_write_dma_safe(struct wfx_dev *wdev, u32 addr, const u8 *buf,
 		tmp = buf;
 	}
 	ret = sram_buf_write(wdev, addr, tmp, len);
-	if (!virt_addr_valid(buf))
+	if (tmp != buf)
 		kfree(tmp);
 	return ret;
 }

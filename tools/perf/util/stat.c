@@ -95,6 +95,14 @@ static const char *id_str[PERF_STAT_EVSEL_ID__MAX] = {
 	ID(TOPDOWN_SLOTS_RETIRED, topdown-slots-retired),
 	ID(TOPDOWN_FETCH_BUBBLES, topdown-fetch-bubbles),
 	ID(TOPDOWN_RECOVERY_BUBBLES, topdown-recovery-bubbles),
+	ID(TOPDOWN_RETIRING, topdown-retiring),
+	ID(TOPDOWN_BAD_SPEC, topdown-bad-spec),
+	ID(TOPDOWN_FE_BOUND, topdown-fe-bound),
+	ID(TOPDOWN_BE_BOUND, topdown-be-bound),
+	ID(TOPDOWN_HEAVY_OPS, topdown-heavy-ops),
+	ID(TOPDOWN_BR_MISPREDICT, topdown-br-mispredict),
+	ID(TOPDOWN_FETCH_LAT, topdown-fetch-lat),
+	ID(TOPDOWN_MEM_BOUND, topdown-mem-bound),
 	ID(SMI_NUM, msr/smi/),
 	ID(APERF, msr/aperf/),
 };
@@ -180,7 +188,7 @@ static int evsel__alloc_stats(struct evsel *evsel, bool alloc_raw)
 	return 0;
 }
 
-int perf_evlist__alloc_stats(struct evlist *evlist, bool alloc_raw)
+int evlist__alloc_stats(struct evlist *evlist, bool alloc_raw)
 {
 	struct evsel *evsel;
 
@@ -192,11 +200,11 @@ int perf_evlist__alloc_stats(struct evlist *evlist, bool alloc_raw)
 	return 0;
 
 out_free:
-	perf_evlist__free_stats(evlist);
+	evlist__free_stats(evlist);
 	return -1;
 }
 
-void perf_evlist__free_stats(struct evlist *evlist)
+void evlist__free_stats(struct evlist *evlist)
 {
 	struct evsel *evsel;
 
@@ -207,7 +215,7 @@ void perf_evlist__free_stats(struct evlist *evlist)
 	}
 }
 
-void perf_evlist__reset_stats(struct evlist *evlist)
+void evlist__reset_stats(struct evlist *evlist)
 {
 	struct evsel *evsel;
 
@@ -217,7 +225,7 @@ void perf_evlist__reset_stats(struct evlist *evlist)
 	}
 }
 
-void perf_evlist__reset_prev_raw_counts(struct evlist *evlist)
+void evlist__reset_prev_raw_counts(struct evlist *evlist)
 {
 	struct evsel *evsel;
 
@@ -225,7 +233,7 @@ void perf_evlist__reset_prev_raw_counts(struct evlist *evlist)
 		evsel__reset_prev_raw_counts(evsel);
 }
 
-static void perf_evsel__copy_prev_raw_counts(struct evsel *evsel)
+static void evsel__copy_prev_raw_counts(struct evsel *evsel)
 {
 	int ncpus = evsel__nr_cpus(evsel);
 	int nthreads = perf_thread_map__nr(evsel->core.threads);
@@ -241,15 +249,15 @@ static void perf_evsel__copy_prev_raw_counts(struct evsel *evsel)
 	evsel->counts->aggr = evsel->prev_raw_counts->aggr;
 }
 
-void perf_evlist__copy_prev_raw_counts(struct evlist *evlist)
+void evlist__copy_prev_raw_counts(struct evlist *evlist)
 {
 	struct evsel *evsel;
 
 	evlist__for_each_entry(evlist, evsel)
-		perf_evsel__copy_prev_raw_counts(evsel);
+		evsel__copy_prev_raw_counts(evsel);
 }
 
-void perf_evlist__save_aggr_prev_raw_counts(struct evlist *evlist)
+void evlist__save_aggr_prev_raw_counts(struct evlist *evlist)
 {
 	struct evsel *evsel;
 
@@ -309,7 +317,7 @@ static int check_per_pkg(struct evsel *counter,
 	if (!(vals->run && vals->ena))
 		return 0;
 
-	s = cpu_map__get_socket(cpus, cpu, NULL);
+	s = cpu_map__get_socket(cpus, cpu, NULL).socket;
 	if (s < 0)
 		return -1;
 
@@ -454,7 +462,7 @@ int perf_event__process_stat_event(struct perf_session *session,
 	count.ena = st->ena;
 	count.run = st->run;
 
-	counter = perf_evlist__id2evsel(session->evlist, st->id);
+	counter = evlist__id2evsel(session->evlist, st->id);
 	if (!counter) {
 		pr_err("Failed to resolve counter for stat event.\n");
 		return -EINVAL;
@@ -523,7 +531,7 @@ int create_perf_stat_counter(struct evsel *evsel,
 	if (leader->core.nr_members > 1)
 		attr->read_format |= PERF_FORMAT_ID|PERF_FORMAT_GROUP;
 
-	attr->inherit = !config->no_inherit;
+	attr->inherit = !config->no_inherit && list_empty(&evsel->bpf_counter_list);
 
 	/*
 	 * Some events get initialized with sample_(period/type) set,

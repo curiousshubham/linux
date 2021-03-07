@@ -2,15 +2,11 @@
 /*
  * Interrupt bottom half.
  *
- * Copyright (c) 2017-2019, Silicon Laboratories, Inc.
+ * Copyright (c) 2017-2020, Silicon Laboratories, Inc.
  * Copyright (c) 2010, ST-Ericsson
  */
 #ifndef WFX_BH_H
 #define WFX_BH_H
-
-#include <linux/atomic.h>
-#include <linux/wait.h>
-#include <linux/workqueue.h>
 
 struct wfx_dev;
 

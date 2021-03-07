@@ -2,14 +2,11 @@
 /*
  * Common bus abstraction layer.
  *
- * Copyright (c) 2017-2018, Silicon Laboratories, Inc.
+ * Copyright (c) 2017-2020, Silicon Laboratories, Inc.
  * Copyright (c) 2010, ST-Ericsson
  */
 #ifndef WFX_BUS_H
 #define WFX_BUS_H
-
-#include <linux/mmc/sdio_func.h>
-#include <linux/spi/spi.h>
 
 #define WFX_REG_CONFIG        0x0
 #define WFX_REG_CONTROL       0x1

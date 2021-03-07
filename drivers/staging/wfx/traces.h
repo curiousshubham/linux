@@ -2,7 +2,7 @@
 /*
  * Tracepoints definitions.
  *
- * Copyright (c) 2018-2019, Silicon Laboratories, Inc.
+ * Copyright (c) 2018-2020, Silicon Laboratories, Inc.
  */
 
 #undef TRACE_SYSTEM
@@ -12,11 +12,8 @@
 #define _WFX_TRACE_H
 
 #include <linux/tracepoint.h>
-#include <net/mac80211.h>
 
 #include "bus.h"
-#include "hif_api_cmd.h"
-#include "hif_api_mib.h"
 
 /* The hell below need some explanations. For each symbolic number, we need to
  * define it with TRACE_DEFINE_ENUM() and in a list for __print_symbolic.

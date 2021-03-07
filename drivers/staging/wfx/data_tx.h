@@ -2,14 +2,11 @@
 /*
  * Datapath implementation.
  *
- * Copyright (c) 2017-2019, Silicon Laboratories, Inc.
+ * Copyright (c) 2017-2020, Silicon Laboratories, Inc.
  * Copyright (c) 2010, ST-Ericsson
  */
 #ifndef WFX_DATA_TX_H
 #define WFX_DATA_TX_H
-
-#include <linux/list.h>
-#include <net/mac80211.h>
 
 #include "hif_api_cmd.h"
 #include "hif_api_mib.h"
@@ -35,8 +32,8 @@ struct tx_policy_cache {
 
 struct wfx_tx_priv {
 	ktime_t xmit_timestamp;
-	struct ieee80211_key_conf *hw_key;
-} __packed;
+	unsigned char icv_size;
+};
 
 void wfx_tx_policy_init(struct wfx_vif *wvif);
 void wfx_tx_policy_upload_work(struct work_struct *work);
