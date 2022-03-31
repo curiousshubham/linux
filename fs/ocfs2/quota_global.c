@@ -36,7 +36,7 @@
  * should be obeyed by all the functions:
  * - any write of quota structure (either to local or global file) is protected
  *   by dqio_sem or dquot->dq_lock.
- * - any modification of global quota file holds inode cluster lock, i_mutex,
+ * - any modification of global quota file holds inode cluster lock, i_rwsem,
  *   and ip_alloc_sem of the global quota file (achieved by
  *   ocfs2_lock_global_qf). It also has to hold qinfo_lock.
  * - an allocation of new blocks for local quota file is protected by
@@ -357,7 +357,6 @@ int ocfs2_global_read_info(struct super_block *sb, int type)
 	}
 	oinfo->dqi_gi.dqi_sb = sb;
 	oinfo->dqi_gi.dqi_type = type;
-	ocfs2_qinfo_lock_res_init(&oinfo->dqi_gqlock, oinfo);
 	oinfo->dqi_gi.dqi_entry_size = sizeof(struct ocfs2_global_disk_dqblk);
 	oinfo->dqi_gi.dqi_ops = &ocfs2_global_ops;
 	oinfo->dqi_gqi_bh = NULL;

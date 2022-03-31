@@ -93,9 +93,12 @@ static void mtk8250_dma_rx_complete(void *param)
 	struct dma_tx_state state;
 	int copied, total, cnt;
 	unsigned char *ptr;
+	unsigned long flags;
 
 	if (data->rx_status == DMA_RX_SHUTDOWN)
 		return;
+
+	spin_lock_irqsave(&up->port.lock, flags);
 
 	dmaengine_tx_status(dma->rxchan, dma->rx_cookie, &state);
 	total = dma->rx_size - state.residue;
@@ -120,6 +123,8 @@ static void mtk8250_dma_rx_complete(void *param)
 	tty_flip_buffer_push(tty_port);
 
 	mtk8250_rx_dma(up);
+
+	spin_unlock_irqrestore(&up->port.lock, flags);
 }
 
 static void mtk8250_rx_dma(struct uart_8250_port *up)
@@ -284,10 +289,10 @@ static void
 mtk8250_set_termios(struct uart_port *port, struct ktermios *termios,
 			struct ktermios *old)
 {
-	unsigned short fraction_L_mapping[] = {
+	static const unsigned short fraction_L_mapping[] = {
 		0, 1, 0x5, 0x15, 0x55, 0x57, 0x57, 0x77, 0x7F, 0xFF, 0xFF
 	};
-	unsigned short fraction_M_mapping[] = {
+	static const unsigned short fraction_M_mapping[] = {
 		0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 3
 	};
 	struct uart_8250_port *up = up_to_u8250p(port);

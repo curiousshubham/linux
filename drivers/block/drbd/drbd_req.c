@@ -30,12 +30,12 @@ static struct drbd_request *drbd_req_new(struct drbd_device *device, struct bio 
 		return NULL;
 	memset(req, 0, sizeof(*req));
 
-	req->private_bio = bio_clone_fast(bio_src, GFP_NOIO, &drbd_io_bio_set);
+	req->private_bio = bio_alloc_clone(device->ldev->backing_bdev, bio_src,
+					   GFP_NOIO, &drbd_io_bio_set);
 	req->private_bio->bi_private = req;
 	req->private_bio->bi_end_io = drbd_request_endio;
 
 	req->rq_state = (bio_data_dir(bio_src) == WRITE ? RQ_WRITE : 0)
-		      | (bio_op(bio_src) == REQ_OP_WRITE_SAME ? RQ_WSAME : 0)
 		      | (bio_op(bio_src) == REQ_OP_WRITE_ZEROES ? RQ_ZEROES : 0)
 		      | (bio_op(bio_src) == REQ_OP_DISCARD ? RQ_UNMAP : 0);
 	req->device = device;
@@ -753,6 +753,7 @@ int __req_mod(struct drbd_request *req, enum drbd_req_event what,
 
 	case WRITE_ACKED_BY_PEER_AND_SIS:
 		req->rq_state |= RQ_NET_SIS;
+		fallthrough;
 	case WRITE_ACKED_BY_PEER:
 		/* Normal operation protocol C: successfully written on peer.
 		 * During resync, even in protocol != C,
@@ -904,13 +905,11 @@ static bool drbd_may_do_local_read(struct drbd_device *device, sector_t sector, 
 static bool remote_due_to_read_balancing(struct drbd_device *device, sector_t sector,
 		enum drbd_read_balancing rbm)
 {
-	struct backing_dev_info *bdi;
 	int stripe_shift;
 
 	switch (rbm) {
 	case RB_CONGESTED_REMOTE:
-		bdi = device->ldev->backing_bdev->bd_disk->queue->backing_dev_info;
-		return bdi_read_congested(bdi);
+		return 0;
 	case RB_LEAST_PENDING:
 		return atomic_read(&device->local_cnt) >
 			atomic_read(&device->ap_pending_cnt) + atomic_read(&device->rs_pending_cnt);
@@ -1150,8 +1149,6 @@ drbd_submit_req_private_bio(struct drbd_request *req)
 		type = DRBD_FAULT_DT_RA;
 	else
 		type = DRBD_FAULT_DT_RD;
-
-	bio_set_dev(bio, device->ldev->backing_bdev);
 
 	/* State may have changed since we grabbed our reference on the
 	 * ->ldev member. Double check, and short-circuit to endio.
@@ -1596,7 +1593,7 @@ void do_submit(struct work_struct *ws)
 	}
 }
 
-blk_qc_t drbd_submit_bio(struct bio *bio)
+void drbd_submit_bio(struct bio *bio)
 {
 	struct drbd_device *device = bio->bi_bdev->bd_disk->private_data;
 
@@ -1609,7 +1606,6 @@ blk_qc_t drbd_submit_bio(struct bio *bio)
 
 	inc_ap_bio(device);
 	__drbd_make_request(device, bio);
-	return BLK_QC_T_NONE;
 }
 
 static bool net_timeout_reached(struct drbd_request *net_req,

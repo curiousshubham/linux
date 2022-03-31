@@ -106,8 +106,10 @@ static const struct regulator_desc rt4831_regulator_descs[] = {
 		.vsel_reg = RT4831_REG_VLCM,
 		.vsel_mask = RT4831_VOLT_MASK,
 		.bypass_reg = RT4831_REG_DSVEN,
+		.bypass_mask = RT4831_DSVMODE_MASK,
 		.bypass_val_on = DSV_MODE_BYPASS,
 		.bypass_val_off = DSV_MODE_NORMAL,
+		.owner = THIS_MODULE,
 	},
 	{
 		.name = "DSVP",
@@ -125,6 +127,8 @@ static const struct regulator_desc rt4831_regulator_descs[] = {
 		.enable_mask = RT4831_POSEN_MASK,
 		.active_discharge_reg = RT4831_REG_DSVEN,
 		.active_discharge_mask = RT4831_POSADEN_MASK,
+		.active_discharge_on = RT4831_POSADEN_MASK,
+		.owner = THIS_MODULE,
 	},
 	{
 		.name = "DSVN",
@@ -142,6 +146,8 @@ static const struct regulator_desc rt4831_regulator_descs[] = {
 		.enable_mask = RT4831_NEGEN_MASK,
 		.active_discharge_reg = RT4831_REG_DSVEN,
 		.active_discharge_mask = RT4831_NEGADEN_MASK,
+		.active_discharge_on = RT4831_NEGADEN_MASK,
+		.owner = THIS_MODULE,
 	}
 };
 
@@ -153,9 +159,9 @@ static int rt4831_regulator_probe(struct platform_device *pdev)
 	int i, ret;
 
 	regmap = dev_get_regmap(pdev->dev.parent, NULL);
-	if (IS_ERR(regmap)) {
+	if (!regmap) {
 		dev_err(&pdev->dev, "Failed to init regmap\n");
-		return PTR_ERR(regmap);
+		return -ENODEV;
 	}
 
 	/* Configure DSV mode to normal by default */

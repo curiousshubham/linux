@@ -60,6 +60,24 @@ void generic_fillattr(struct user_namespace *mnt_userns, struct inode *inode,
 EXPORT_SYMBOL(generic_fillattr);
 
 /**
+ * generic_fill_statx_attr - Fill in the statx attributes from the inode flags
+ * @inode:	Inode to use as the source
+ * @stat:	Where to fill in the attribute flags
+ *
+ * Fill in the STATX_ATTR_* flags in the kstat structure for properties of the
+ * inode that are published on i_flags and enforced by the VFS.
+ */
+void generic_fill_statx_attr(struct inode *inode, struct kstat *stat)
+{
+	if (inode->i_flags & S_IMMUTABLE)
+		stat->attributes |= STATX_ATTR_IMMUTABLE;
+	if (inode->i_flags & S_APPEND)
+		stat->attributes |= STATX_ATTR_APPEND;
+	stat->attributes_mask |= KSTAT_ATTR_VFS_FLAGS;
+}
+EXPORT_SYMBOL(generic_fill_statx_attr);
+
+/**
  * vfs_getattr_nosec - getattr without security checks
  * @path: file to get attributes from
  * @stat: structure to return attributes in
@@ -86,11 +104,19 @@ int vfs_getattr_nosec(const struct path *path, struct kstat *stat,
 	/* SB_NOATIME means filesystem supplies dummy atime value */
 	if (inode->i_sb->s_flags & SB_NOATIME)
 		stat->result_mask &= ~STATX_ATIME;
+
+	/*
+	 * Note: If you add another clause to set an attribute flag, please
+	 * update attributes_mask below.
+	 */
 	if (IS_AUTOMOUNT(inode))
 		stat->attributes |= STATX_ATTR_AUTOMOUNT;
 
 	if (IS_DAX(inode))
 		stat->attributes |= STATX_ATTR_DAX;
+
+	stat->attributes_mask |= (STATX_ATTR_AUTOMOUNT |
+				  STATX_ATTR_DAX);
 
 	mnt_userns = mnt_user_ns(path->mnt);
 	if (inode->i_op->getattr)
@@ -158,6 +184,20 @@ int vfs_fstat(int fd, struct kstat *stat)
 	return error;
 }
 
+int getname_statx_lookup_flags(int flags)
+{
+	int lookup_flags = 0;
+
+	if (!(flags & AT_SYMLINK_NOFOLLOW))
+		lookup_flags |= LOOKUP_FOLLOW;
+	if (!(flags & AT_NO_AUTOMOUNT))
+		lookup_flags |= LOOKUP_AUTOMOUNT;
+	if (flags & AT_EMPTY_PATH)
+		lookup_flags |= LOOKUP_EMPTY;
+
+	return lookup_flags;
+}
+
 /**
  * vfs_statx - Get basic and extra attributes by filename
  * @dfd: A file descriptor representing the base dir for a relative filename
@@ -173,26 +213,19 @@ int vfs_fstat(int fd, struct kstat *stat)
  *
  * 0 will be returned on success, and a -ve error code if unsuccessful.
  */
-static int vfs_statx(int dfd, const char __user *filename, int flags,
+static int vfs_statx(int dfd, struct filename *filename, int flags,
 	      struct kstat *stat, u32 request_mask)
 {
 	struct path path;
-	unsigned lookup_flags = 0;
+	unsigned int lookup_flags = getname_statx_lookup_flags(flags);
 	int error;
 
 	if (flags & ~(AT_SYMLINK_NOFOLLOW | AT_NO_AUTOMOUNT | AT_EMPTY_PATH |
 		      AT_STATX_SYNC_TYPE))
 		return -EINVAL;
 
-	if (!(flags & AT_SYMLINK_NOFOLLOW))
-		lookup_flags |= LOOKUP_FOLLOW;
-	if (!(flags & AT_NO_AUTOMOUNT))
-		lookup_flags |= LOOKUP_AUTOMOUNT;
-	if (flags & AT_EMPTY_PATH)
-		lookup_flags |= LOOKUP_EMPTY;
-
 retry:
-	error = user_path_at(dfd, filename, lookup_flags, &path);
+	error = filename_lookup(dfd, filename, lookup_flags, &path, NULL);
 	if (error)
 		goto out;
 
@@ -214,8 +247,15 @@ out:
 int vfs_fstatat(int dfd, const char __user *filename,
 			      struct kstat *stat, int flags)
 {
-	return vfs_statx(dfd, filename, flags | AT_NO_AUTOMOUNT,
-			 stat, STATX_BASIC_STATS);
+	int ret;
+	int statx_flags = flags | AT_NO_AUTOMOUNT;
+	struct filename *name;
+
+	name = getname_flags(filename, getname_statx_lookup_flags(statx_flags), NULL);
+	ret = vfs_statx(dfd, name, statx_flags, stat, STATX_BASIC_STATS);
+	putname(name);
+
+	return ret;
 }
 
 #ifdef __ARCH_WANT_OLD_STAT
@@ -576,7 +616,7 @@ cp_statx(const struct kstat *stat, struct statx __user *buffer)
 	return copy_to_user(buffer, &tmp, sizeof(tmp)) ? -EFAULT : 0;
 }
 
-int do_statx(int dfd, const char __user *filename, unsigned flags,
+int do_statx(int dfd, struct filename *filename, unsigned int flags,
 	     unsigned int mask, struct statx __user *buffer)
 {
 	struct kstat stat;
@@ -610,7 +650,14 @@ SYSCALL_DEFINE5(statx,
 		unsigned int, mask,
 		struct statx __user *, buffer)
 {
-	return do_statx(dfd, filename, flags, mask, buffer);
+	int ret;
+	struct filename *name;
+
+	name = getname_flags(filename, getname_statx_lookup_flags(flags), NULL);
+	ret = do_statx(dfd, name, flags, mask, buffer);
+	putname(name);
+
+	return ret;
 }
 
 #ifdef CONFIG_COMPAT
