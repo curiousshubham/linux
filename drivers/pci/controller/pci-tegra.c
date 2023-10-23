@@ -415,6 +415,13 @@ static inline u32 pads_readl(struct tegra_pcie *pcie, unsigned long offset)
  * address (access to which generates correct config transaction) falls in
  * this 4 KiB region.
  */
+static unsigned int tegra_pcie_conf_offset(u8 bus, unsigned int devfn,
+					   unsigned int where)
+{
+	return ((where & 0xf00) << 16) | (bus << 16) | (PCI_SLOT(devfn) << 11) |
+	       (PCI_FUNC(devfn) << 8) | (where & 0xff);
+}
+
 static void __iomem *tegra_pcie_map_bus(struct pci_bus *bus,
 					unsigned int devfn,
 					int where)
@@ -436,9 +443,7 @@ static void __iomem *tegra_pcie_map_bus(struct pci_bus *bus,
 		unsigned int offset;
 		u32 base;
 
-		offset = PCI_CONF1_EXT_ADDRESS(bus->number, PCI_SLOT(devfn),
-					       PCI_FUNC(devfn), where) &
-			 ~PCI_CONF1_ENABLE;
+		offset = tegra_pcie_conf_offset(bus->number, devfn, where);
 
 		/* move 4 KiB window to offset within the FPCI region */
 		base = 0xfe100000 + ((offset & ~(SZ_4K - 1)) >> 8);
@@ -1325,11 +1330,8 @@ static struct phy *devm_of_phy_optional_get_index(struct device *dev,
 	if (!name)
 		return ERR_PTR(-ENOMEM);
 
-	phy = devm_of_phy_get(dev, np, name);
+	phy = devm_of_phy_optional_get(dev, np, name);
 	kfree(name);
-
-	if (PTR_ERR(phy) == -ENODEV)
-		phy = NULL;
 
 	return phy;
 }
@@ -1373,7 +1375,7 @@ static int tegra_pcie_phys_get(struct tegra_pcie *pcie)
 	struct tegra_pcie_port *port;
 	int err;
 
-	if (!soc->has_gen2 || of_find_property(np, "phys", NULL) != NULL)
+	if (!soc->has_gen2 || of_property_present(np, "phys"))
 		return tegra_pcie_phys_get_legacy(pcie);
 
 	list_for_each_entry(port, &pcie->ports, list) {
@@ -1942,7 +1944,7 @@ static bool of_regulator_bulk_available(struct device_node *np,
 	for (i = 0; i < num_supplies; i++) {
 		snprintf(property, 32, "%s-supply", supplies[i].supply);
 
-		if (of_find_property(np, property, NULL) == NULL)
+		if (!of_property_present(np, property))
 			return false;
 	}
 
@@ -2197,10 +2199,11 @@ static int tegra_pcie_parse_dt(struct tegra_pcie *pcie)
 		 * and in this case fall back to using AFI per port register
 		 * to toggle PERST# SFIO line.
 		 */
-		rp->reset_gpio = devm_gpiod_get_from_of_node(dev, port,
-							     "reset-gpios", 0,
-							     GPIOD_OUT_LOW,
-							     label);
+		rp->reset_gpio = devm_fwnode_gpiod_get(dev,
+						       of_fwnode_handle(port),
+						       "reset",
+						       GPIOD_OUT_LOW,
+						       label);
 		if (IS_ERR(rp->reset_gpio)) {
 			if (PTR_ERR(rp->reset_gpio) == -ENOENT) {
 				rp->reset_gpio = NULL;
@@ -2677,7 +2680,7 @@ put_resources:
 	return err;
 }
 
-static int tegra_pcie_remove(struct platform_device *pdev)
+static void tegra_pcie_remove(struct platform_device *pdev)
 {
 	struct tegra_pcie *pcie = platform_get_drvdata(pdev);
 	struct pci_host_bridge *host = pci_host_bridge_from_priv(pcie);
@@ -2698,8 +2701,6 @@ static int tegra_pcie_remove(struct platform_device *pdev)
 
 	list_for_each_entry_safe(port, tmp, &pcie->ports, list)
 		tegra_pcie_port_free(port);
-
-	return 0;
 }
 
 static int tegra_pcie_pm_suspend(struct device *dev)
@@ -2805,7 +2806,6 @@ static struct platform_driver tegra_pcie_driver = {
 		.pm = &tegra_pcie_pm_ops,
 	},
 	.probe = tegra_pcie_probe,
-	.remove = tegra_pcie_remove,
+	.remove_new = tegra_pcie_remove,
 };
 module_platform_driver(tegra_pcie_driver);
-MODULE_LICENSE("GPL");

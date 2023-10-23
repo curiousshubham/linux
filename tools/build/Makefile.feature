@@ -64,6 +64,7 @@ FEATURE_TESTS_BASIC :=                  \
         lzma                            \
         get_cpuid                       \
         bpf                             \
+        scandirat			\
         sched_getcpu			\
         sdt				\
         setns				\
@@ -80,6 +81,7 @@ FEATURE_TESTS_EXTRA :=                  \
          compile-32                     \
          compile-x32                    \
          cplus-demangle                 \
+         cxa-demangle                   \
          gtk2                           \
          gtk2-infobar                   \
          hello                          \
@@ -103,6 +105,7 @@ FEATURE_TESTS_EXTRA :=                  \
          libbpf-bpf_prog_load           \
          libbpf-bpf_object__next_program \
          libbpf-bpf_object__next_map    \
+         libbpf-bpf_program__set_insns  \
          libbpf-bpf_create_map		\
          libpfm4                        \
          libdebuginfod			\

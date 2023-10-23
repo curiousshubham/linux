@@ -675,6 +675,8 @@ static void stm32_dma_handle_chan_paused(struct stm32_dma_chan *chan)
 
 	chan->chan_reg.dma_sndtr = stm32_dma_read(dmadev, STM32_DMA_SNDTR(chan->id));
 
+	chan->status = DMA_PAUSED;
+
 	dev_dbg(chan2dev(chan), "vchan %pK: paused\n", &chan->vchan);
 }
 
@@ -789,9 +791,7 @@ static irqreturn_t stm32_dma_chan_irq(int irq, void *devid)
 	if (status & STM32_DMA_TCI) {
 		stm32_dma_irq_clear(chan, STM32_DMA_TCI);
 		if (scr & STM32_DMA_SCR_TCIE) {
-			if (chan->status == DMA_PAUSED && !(scr & STM32_DMA_SCR_EN))
-				stm32_dma_handle_chan_paused(chan);
-			else
+			if (chan->status != DMA_PAUSED)
 				stm32_dma_handle_chan_done(chan, scr);
 		}
 		status &= ~STM32_DMA_TCI;
@@ -838,13 +838,11 @@ static int stm32_dma_pause(struct dma_chan *c)
 		return -EPERM;
 
 	spin_lock_irqsave(&chan->vchan.lock, flags);
+
 	ret = stm32_dma_disable_chan(chan);
-	/*
-	 * A transfer complete flag is set to indicate the end of transfer due to the stream
-	 * interruption, so wait for interrupt
-	 */
 	if (!ret)
-		chan->status = DMA_PAUSED;
+		stm32_dma_handle_chan_paused(chan);
+
 	spin_unlock_irqrestore(&chan->vchan.lock, flags);
 
 	return ret;
@@ -1115,8 +1113,10 @@ static struct dma_async_tx_descriptor *stm32_dma_prep_slave_sg(
 		chan->chan_reg.dma_scr &= ~STM32_DMA_SCR_PFCTRL;
 
 	/* Activate Double Buffer Mode if DMA triggers STM32 MDMA and more than 1 sg */
-	if (chan->trig_mdma && sg_len > 1)
+	if (chan->trig_mdma && sg_len > 1) {
 		chan->chan_reg.dma_scr |= STM32_DMA_SCR_DBM;
+		chan->chan_reg.dma_scr &= ~STM32_DMA_SCR_CT;
+	}
 
 	for_each_sg(sgl, sg, sg_len, i) {
 		ret = stm32_dma_set_xfer_param(chan, direction, &buswidth,
@@ -1389,11 +1389,12 @@ static size_t stm32_dma_desc_residue(struct stm32_dma_chan *chan,
 
 	residue = stm32_dma_get_remaining_bytes(chan);
 
-	if (chan->desc->cyclic && !stm32_dma_is_current_sg(chan)) {
+	if ((chan->desc->cyclic || chan->trig_mdma) && !stm32_dma_is_current_sg(chan)) {
 		n_sg++;
 		if (n_sg == chan->desc->num_sgs)
 			n_sg = 0;
-		residue = sg_req->len;
+		if (!chan->trig_mdma)
+			residue = sg_req->len;
 	}
 
 	/*
@@ -1403,7 +1404,7 @@ static size_t stm32_dma_desc_residue(struct stm32_dma_chan *chan,
 	 * residue = remaining bytes from NDTR + remaining
 	 * periods/sg to be transferred
 	 */
-	if (!chan->desc->cyclic || n_sg != 0)
+	if ((!chan->desc->cyclic && !chan->trig_mdma) || n_sg != 0)
 		for (i = n_sg; i < desc->num_sgs; i++)
 			residue += desc->sg_req[i].len;
 
@@ -1583,8 +1584,7 @@ static int stm32_dma_probe(struct platform_device *pdev)
 
 	dd = &dmadev->ddev;
 
-	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
-	dmadev->base = devm_ioremap_resource(&pdev->dev, res);
+	dmadev->base = devm_platform_get_and_ioremap_resource(pdev, 0, &res);
 	if (IS_ERR(dmadev->base))
 		return PTR_ERR(dmadev->base);
 

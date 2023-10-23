@@ -56,6 +56,9 @@ static const struct of_device_id exynos_clkout_ids[] = {
 		.compatible = "samsung,exynos4210-pmu",
 		.data = &exynos_clkout_exynos4,
 	}, {
+		.compatible = "samsung,exynos4212-pmu",
+		.data = &exynos_clkout_exynos4,
+	}, {
 		.compatible = "samsung,exynos4412-pmu",
 		.data = &exynos_clkout_exynos4,
 	}, {
@@ -81,17 +84,19 @@ MODULE_DEVICE_TABLE(of, exynos_clkout_ids);
 static int exynos_clkout_match_parent_dev(struct device *dev, u32 *mux_mask)
 {
 	const struct exynos_clkout_variant *variant;
+	const struct of_device_id *match;
 
 	if (!dev->parent) {
 		dev_err(dev, "not instantiated from MFD\n");
 		return -EINVAL;
 	}
 
-	variant = of_device_get_match_data(dev->parent);
-	if (!variant) {
+	match = of_match_device(exynos_clkout_ids, dev->parent);
+	if (!match) {
 		dev_err(dev, "cannot match parent device\n");
 		return -EINVAL;
 	}
+	variant = match->data;
 
 	*mux_mask = variant->mux_mask;
 
@@ -194,15 +199,13 @@ clks_put:
 	return ret;
 }
 
-static int exynos_clkout_remove(struct platform_device *pdev)
+static void exynos_clkout_remove(struct platform_device *pdev)
 {
 	struct exynos_clkout *clkout = platform_get_drvdata(pdev);
 
 	of_clk_del_provider(clkout->np);
 	clk_hw_unregister(clkout->data.hws[0]);
 	iounmap(clkout->reg);
-
-	return 0;
 }
 
 static int __maybe_unused exynos_clkout_suspend(struct device *dev)
@@ -233,7 +236,7 @@ static struct platform_driver exynos_clkout_driver = {
 		.pm = &exynos_clkout_pm_ops,
 	},
 	.probe = exynos_clkout_probe,
-	.remove = exynos_clkout_remove,
+	.remove_new = exynos_clkout_remove,
 };
 module_platform_driver(exynos_clkout_driver);
 

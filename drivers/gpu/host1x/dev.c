@@ -11,8 +11,9 @@
 #include <linux/io.h>
 #include <linux/list.h>
 #include <linux/module.h>
-#include <linux/of_device.h>
 #include <linux/of.h>
+#include <linux/of_platform.h>
+#include <linux/platform_device.h>
 #include <linux/pm_runtime.h>
 #include <linux/slab.h>
 
@@ -225,6 +226,18 @@ static const struct host1x_sid_entry tegra234_sid_table[] = {
 		.offset = 0x34,
 		.limit = 0x34
 	},
+	{
+		/* NVDEC channel */
+		.base = 0x17c8,
+		.offset = 0x30,
+		.limit = 0x30,
+	},
+	{
+		/* NVDEC MMIO */
+		.base = 0x1698,
+		.offset = 0x34,
+		.limit = 0x34,
+	},
 };
 
 static const struct host1x_info host1x08_info = {
@@ -292,6 +305,10 @@ static void host1x_setup_virtualization_tables(struct host1x *host)
 
 static bool host1x_wants_iommu(struct host1x *host1x)
 {
+	/* Our IOMMU usage policy doesn't currently play well with GART */
+	if (of_machine_is_compatible("nvidia,tegra20"))
+		return false;
+
 	/*
 	 * If we support addressing a maximum of 32 bits of physical memory
 	 * and if the host1x firewall is enabled, there's no need to enable
@@ -471,7 +488,6 @@ static int host1x_get_resets(struct host1x *host)
 static int host1x_probe(struct platform_device *pdev)
 {
 	struct host1x *host;
-	int syncpt_irq;
 	int err;
 
 	host = devm_kzalloc(&pdev->dev, sizeof(*host), GFP_KERNEL);
@@ -500,9 +516,9 @@ static int host1x_probe(struct platform_device *pdev)
 			return PTR_ERR(host->regs);
 	}
 
-	syncpt_irq = platform_get_irq(pdev, 0);
-	if (syncpt_irq < 0)
-		return syncpt_irq;
+	host->syncpt_irq = platform_get_irq(pdev, 0);
+	if (host->syncpt_irq < 0)
+		return host->syncpt_irq;
 
 	mutex_init(&host->devices_lock);
 	INIT_LIST_HEAD(&host->devices);
@@ -562,7 +578,7 @@ static int host1x_probe(struct platform_device *pdev)
 		goto free_contexts;
 	}
 
-	err = host1x_intr_init(host, syncpt_irq);
+	err = host1x_intr_init(host);
 	if (err) {
 		dev_err(&pdev->dev, "failed to initialize interrupts\n");
 		goto deinit_syncpt;

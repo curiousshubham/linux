@@ -183,12 +183,10 @@ send_request:
 			if (req != IDH_REQ_GPU_INIT_DATA) {
 				pr_err("Doesn't get msg:%d from pf, error=%d\n", event, r);
 				return r;
-			}
-			else /* host doesn't support REQ_GPU_INIT_DATA handshake */
+			} else /* host doesn't support REQ_GPU_INIT_DATA handshake */
 				adev->virt.req_init_data_ver = 0;
 		} else {
-			if (req == IDH_REQ_GPU_INIT_DATA)
-			{
+			if (req == IDH_REQ_GPU_INIT_DATA) {
 				adev->virt.req_init_data_ver =
 					RREG32_NO_KIQ(mmMAILBOX_MSGBUF_RCV_DW1);
 
@@ -317,7 +315,6 @@ flr_done:
 		reset_context.method = AMD_RESET_METHOD_NONE;
 		reset_context.reset_req_dev = adev;
 		clear_bit(AMDGPU_NEED_FULL_RESET, &reset_context.flags);
-		clear_bit(AMDGPU_SKIP_MODE2_RESET, &reset_context.flags);
 
 		amdgpu_device_gpu_recover(adev, NULL, &reset_context);
 	}
@@ -427,6 +424,11 @@ void xgpu_nv_mailbox_put_irq(struct amdgpu_device *adev)
 	amdgpu_irq_put(adev, &adev->virt.rcv_irq, 0);
 }
 
+static void xgpu_nv_ras_poison_handler(struct amdgpu_device *adev)
+{
+	xgpu_nv_send_access_requests(adev, IDH_RAS_POISON);
+}
+
 const struct amdgpu_virt_ops xgpu_nv_virt_ops = {
 	.req_full_gpu	= xgpu_nv_request_full_gpu_access,
 	.rel_full_gpu	= xgpu_nv_release_full_gpu_access,
@@ -434,4 +436,5 @@ const struct amdgpu_virt_ops xgpu_nv_virt_ops = {
 	.reset_gpu = xgpu_nv_request_reset,
 	.wait_reset = NULL,
 	.trans_msg = xgpu_nv_mailbox_trans_msg,
+	.ras_poison_handler = xgpu_nv_ras_poison_handler,
 };

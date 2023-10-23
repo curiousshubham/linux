@@ -399,7 +399,7 @@ struct counter_device {
 	struct mutex ops_exist_lock;
 };
 
-void *counter_priv(const struct counter_device *const counter);
+void *counter_priv(const struct counter_device *const counter) __attribute_const__;
 
 struct counter_device *counter_alloc(size_t sizeof_priv);
 void counter_put(struct counter_device *const counter);
@@ -542,11 +542,10 @@ struct counter_array {
 #define DEFINE_COUNTER_ARRAY_CAPTURE(_name, _length) \
 	DEFINE_COUNTER_ARRAY_U64(_name, _length)
 
-#define DEFINE_COUNTER_ARRAY_POLARITY(_name, _enums, _length) \
-	DEFINE_COUNTER_AVAILABLE(_name##_available, _enums); \
+#define DEFINE_COUNTER_ARRAY_POLARITY(_name, _available, _length) \
 	struct counter_array _name = { \
 		.type = COUNTER_COMP_SIGNAL_POLARITY, \
-		.avail = &(_name##_available), \
+		.avail = &(_available), \
 		.length = (_length), \
 	}
 

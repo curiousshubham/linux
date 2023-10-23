@@ -15,7 +15,7 @@
 #include <linux/kernel.h>
 #include <linux/module.h>
 #include <linux/mutex.h>
-#include <linux/of_device.h>
+#include <linux/of.h>
 #include <linux/platform_device.h>
 #include <linux/string.h>
 
@@ -1080,13 +1080,7 @@ static int mlxbf_i2c_init_resource(struct platform_device *pdev,
 	if (!tmp_res)
 		return -ENOMEM;
 
-	tmp_res->params = platform_get_resource(pdev, IORESOURCE_MEM, type);
-	if (!tmp_res->params) {
-		devm_kfree(dev, tmp_res);
-		return -EIO;
-	}
-
-	tmp_res->io = devm_ioremap_resource(dev, tmp_res->params);
+	tmp_res->io = devm_platform_get_and_ioremap_resource(pdev, type, &tmp_res->params);
 	if (IS_ERR(tmp_res->io)) {
 		devm_kfree(dev, tmp_res);
 		return PTR_ERR(tmp_res->io);
@@ -2247,7 +2241,6 @@ static struct i2c_adapter_quirks mlxbf_i2c_quirks = {
 	.max_write_len = MLXBF_I2C_MASTER_DATA_W_LENGTH,
 };
 
-#ifdef CONFIG_ACPI
 static const struct acpi_device_id mlxbf_i2c_acpi_ids[] = {
 	{ "MLNXBF03", (kernel_ulong_t)&mlxbf_i2c_chip[MLXBF_I2C_CHIP_TYPE_1] },
 	{ "MLNXBF23", (kernel_ulong_t)&mlxbf_i2c_chip[MLXBF_I2C_CHIP_TYPE_2] },
@@ -2282,12 +2275,6 @@ static int mlxbf_i2c_acpi_probe(struct device *dev, struct mlxbf_i2c_priv *priv)
 
 	return 0;
 }
-#else
-static int mlxbf_i2c_acpi_probe(struct device *dev, struct mlxbf_i2c_priv *priv)
-{
-	return -ENOENT;
-}
-#endif /* CONFIG_ACPI */
 
 static int mlxbf_i2c_probe(struct platform_device *pdev)
 {
@@ -2330,10 +2317,8 @@ static int mlxbf_i2c_probe(struct platform_device *pdev)
 
 		ret = mlxbf_i2c_init_resource(pdev, &priv->smbus,
 					      MLXBF_I2C_SMBUS_RES);
-		if (ret < 0) {
-			dev_err(dev, "Cannot fetch smbus resource info");
-			return ret;
-		}
+		if (ret < 0)
+			return dev_err_probe(dev, ret, "Cannot fetch smbus resource info");
 
 		priv->timer->io = priv->smbus->io;
 		priv->mst->io = priv->smbus->io + MLXBF_I2C_MST_ADDR_OFFSET;
@@ -2341,39 +2326,29 @@ static int mlxbf_i2c_probe(struct platform_device *pdev)
 	} else {
 		ret = mlxbf_i2c_init_resource(pdev, &priv->timer,
 					      MLXBF_I2C_SMBUS_TIMER_RES);
-		if (ret < 0) {
-			dev_err(dev, "Cannot fetch timer resource info");
-			return ret;
-		}
+		if (ret < 0)
+			return dev_err_probe(dev, ret, "Cannot fetch timer resource info");
 
 		ret = mlxbf_i2c_init_resource(pdev, &priv->mst,
 					      MLXBF_I2C_SMBUS_MST_RES);
-		if (ret < 0) {
-			dev_err(dev, "Cannot fetch master resource info");
-			return ret;
-		}
+		if (ret < 0)
+			return dev_err_probe(dev, ret, "Cannot fetch master resource info");
 
 		ret = mlxbf_i2c_init_resource(pdev, &priv->slv,
 					      MLXBF_I2C_SMBUS_SLV_RES);
-		if (ret < 0) {
-			dev_err(dev, "Cannot fetch slave resource info");
-			return ret;
-		}
+		if (ret < 0)
+			return dev_err_probe(dev, ret, "Cannot fetch slave resource info");
 	}
 
 	ret = mlxbf_i2c_init_resource(pdev, &priv->mst_cause,
 				      MLXBF_I2C_MST_CAUSE_RES);
-	if (ret < 0) {
-		dev_err(dev, "Cannot fetch cause master resource info");
-		return ret;
-	}
+	if (ret < 0)
+		return dev_err_probe(dev, ret, "Cannot fetch cause master resource info");
 
 	ret = mlxbf_i2c_init_resource(pdev, &priv->slv_cause,
 				      MLXBF_I2C_SLV_CAUSE_RES);
-	if (ret < 0) {
-		dev_err(dev, "Cannot fetch cause slave resource info");
-		return ret;
-	}
+	if (ret < 0)
+		return dev_err_probe(dev, ret, "Cannot fetch cause slave resource info");
 
 	adap = &priv->adap;
 	adap->owner = THIS_MODULE;
@@ -2404,11 +2379,9 @@ static int mlxbf_i2c_probe(struct platform_device *pdev)
 	 * does not really hurt, then keep the code as is.
 	 */
 	ret = mlxbf_i2c_init_master(pdev, priv);
-	if (ret < 0) {
-		dev_err(dev, "failed to initialize smbus master %d",
-			priv->bus);
-		return ret;
-	}
+	if (ret < 0)
+		return dev_err_probe(dev, ret, "failed to initialize smbus master %d",
+				     priv->bus);
 
 	mlxbf_i2c_init_timings(pdev, priv);
 
@@ -2420,10 +2393,8 @@ static int mlxbf_i2c_probe(struct platform_device *pdev)
 	ret = devm_request_irq(dev, irq, mlxbf_i2c_irq,
 			       IRQF_SHARED | IRQF_PROBE_SHARED,
 			       dev_name(dev), priv);
-	if (ret < 0) {
-		dev_err(dev, "Cannot get irq %d\n", irq);
-		return ret;
-	}
+	if (ret < 0)
+		return dev_err_probe(dev, ret, "Cannot get irq %d\n", irq);
 
 	priv->irq = irq;
 
@@ -2440,7 +2411,7 @@ static int mlxbf_i2c_probe(struct platform_device *pdev)
 	return 0;
 }
 
-static int mlxbf_i2c_remove(struct platform_device *pdev)
+static void mlxbf_i2c_remove(struct platform_device *pdev)
 {
 	struct mlxbf_i2c_priv *priv = platform_get_drvdata(pdev);
 	struct device *dev = &pdev->dev;
@@ -2481,18 +2452,14 @@ static int mlxbf_i2c_remove(struct platform_device *pdev)
 	devm_free_irq(dev, priv->irq, priv);
 
 	i2c_del_adapter(&priv->adap);
-
-	return 0;
 }
 
 static struct platform_driver mlxbf_i2c_driver = {
 	.probe = mlxbf_i2c_probe,
-	.remove = mlxbf_i2c_remove,
+	.remove_new = mlxbf_i2c_remove,
 	.driver = {
 		.name = "i2c-mlxbf",
-#ifdef CONFIG_ACPI
 		.acpi_match_table = ACPI_PTR(mlxbf_i2c_acpi_ids),
-#endif /* CONFIG_ACPI  */
 	},
 };
 
