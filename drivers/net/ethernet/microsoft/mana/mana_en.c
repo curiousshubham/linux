@@ -481,7 +481,7 @@ static int mana_get_tx_queue(struct net_device *ndev, struct sk_buff *skb,
 	struct sock *sk = skb->sk;
 	int txq;
 
-	txq = apc->indir_table[hash & MANA_INDIRECT_TABLE_MASK];
+	txq = apc->indir_table[hash & (apc->indir_table_sz - 1)];
 
 	if (txq != old_q && sk && sk_fullsock(sk) &&
 	    rcu_access_pointer(sk->sk_dst_cache))
@@ -601,7 +601,7 @@ static void mana_get_rxbuf_cfg(int mtu, u32 *datasize, u32 *alloc_size,
 
 	*alloc_size = mtu + MANA_RXBUF_PAD + *headroom;
 
-	*datasize = ALIGN(mtu + ETH_HLEN, MANA_RX_DATA_ALIGN);
+	*datasize = mtu + ETH_HLEN;
 }
 
 static int mana_pre_alloc_rxbufs(struct mana_port_context *mpc, int new_mtu)
@@ -690,12 +690,12 @@ static int mana_change_mtu(struct net_device *ndev, int new_mtu)
 		goto out;
 	}
 
-	ndev->mtu = new_mtu;
+	WRITE_ONCE(ndev->mtu, new_mtu);
 
 	err = mana_attach(ndev);
 	if (err) {
 		netdev_err(ndev, "mana_attach failed: %d\n", err);
-		ndev->mtu = old_mtu;
+		WRITE_ONCE(ndev->mtu, old_mtu);
 	}
 
 out:
@@ -719,6 +719,13 @@ static void mana_cleanup_port_context(struct mana_port_context *apc)
 {
 	kfree(apc->rxqs);
 	apc->rxqs = NULL;
+}
+
+static void mana_cleanup_indir_table(struct mana_port_context *apc)
+{
+	apc->indir_table_sz = 0;
+	kfree(apc->indir_table);
+	kfree(apc->rxobj_table);
 }
 
 static int mana_init_port_context(struct mana_port_context *apc)
@@ -962,7 +969,16 @@ static int mana_query_vport_cfg(struct mana_port_context *apc, u32 vport_index,
 
 	*max_sq = resp.max_num_sq;
 	*max_rq = resp.max_num_rq;
-	*num_indir_entry = resp.num_indirection_ent;
+	if (resp.num_indirection_ent > 0 &&
+	    resp.num_indirection_ent <= MANA_INDIRECT_TABLE_MAX_SIZE &&
+	    is_power_of_2(resp.num_indirection_ent)) {
+		*num_indir_entry = resp.num_indirection_ent;
+	} else {
+		netdev_warn(apc->ndev,
+			    "Setting indirection table size to default %d for vPort %d\n",
+			    MANA_INDIRECT_TABLE_DEF_SIZE, apc->port_idx);
+		*num_indir_entry = MANA_INDIRECT_TABLE_DEF_SIZE;
+	}
 
 	apc->port_handle = resp.vport;
 	ether_addr_copy(apc->mac_addr, resp.mac_addr);
@@ -1054,15 +1070,13 @@ static int mana_cfg_vport_steering(struct mana_port_context *apc,
 				   bool update_default_rxobj, bool update_key,
 				   bool update_tab)
 {
-	u16 num_entries = MANA_INDIRECT_TABLE_SIZE;
 	struct mana_cfg_rx_steer_req_v2 *req;
 	struct mana_cfg_rx_steer_resp resp = {};
 	struct net_device *ndev = apc->ndev;
-	mana_handle_t *req_indir_tab;
 	u32 req_buf_size;
 	int err;
 
-	req_buf_size = sizeof(*req) + sizeof(mana_handle_t) * num_entries;
+	req_buf_size = struct_size(req, indir_tab, apc->indir_table_sz);
 	req = kzalloc(req_buf_size, GFP_KERNEL);
 	if (!req)
 		return -ENOMEM;
@@ -1073,8 +1087,9 @@ static int mana_cfg_vport_steering(struct mana_port_context *apc,
 	req->hdr.req.msg_version = GDMA_MESSAGE_V2;
 
 	req->vport = apc->port_handle;
-	req->num_indir_entries = num_entries;
-	req->indir_tab_offset = sizeof(*req);
+	req->num_indir_entries = apc->indir_table_sz;
+	req->indir_tab_offset = offsetof(struct mana_cfg_rx_steer_req_v2,
+					 indir_tab);
 	req->rx_enable = rx;
 	req->rss_enable = apc->rss_state;
 	req->update_default_rxobj = update_default_rxobj;
@@ -1086,11 +1101,9 @@ static int mana_cfg_vport_steering(struct mana_port_context *apc,
 	if (update_key)
 		memcpy(&req->hashkey, apc->hashkey, MANA_HASH_KEY_SIZE);
 
-	if (update_tab) {
-		req_indir_tab = (mana_handle_t *)(req + 1);
-		memcpy(req_indir_tab, apc->rxobj_table,
-		       req->num_indir_entries * sizeof(mana_handle_t));
-	}
+	if (update_tab)
+		memcpy(req->indir_tab, apc->rxobj_table,
+		       flex_array_size(req, indir_tab, req->num_indir_entries));
 
 	err = mana_send_request(apc->ac, req, req_buf_size, &resp,
 				sizeof(resp));
@@ -1113,7 +1126,7 @@ static int mana_cfg_vport_steering(struct mana_port_context *apc,
 	}
 
 	netdev_info(ndev, "Configured steering vPort %llu entries %u\n",
-		    apc->port_handle, num_entries);
+		    apc->port_handle, apc->indir_table_sz);
 out:
 	kfree(req);
 	return err;
@@ -1244,6 +1257,7 @@ static int mana_create_eq(struct mana_context *ac)
 	spec.eq.log2_throttle_limit = LOG2_EQ_THROTTLE;
 
 	for (i = 0; i < gc->max_num_queues; i++) {
+		spec.eq.msix_index = (i + 1) % gc->num_msix_usable;
 		err = mana_gd_create_mana_eq(gd, &spec, &ac->eqs[i].eq);
 		if (err)
 			goto out;
@@ -1890,10 +1904,10 @@ static int mana_create_txq(struct mana_port_context *apc,
 	 *  to prevent overflow.
 	 */
 	txq_size = MAX_SEND_BUFFERS_PER_QUEUE * 32;
-	BUILD_BUG_ON(!PAGE_ALIGNED(txq_size));
+	BUILD_BUG_ON(!MANA_PAGE_ALIGNED(txq_size));
 
 	cq_size = MAX_SEND_BUFFERS_PER_QUEUE * COMP_ENTRY_SIZE;
-	cq_size = PAGE_ALIGN(cq_size);
+	cq_size = MANA_PAGE_ALIGN(cq_size);
 
 	gc = gd->gdma_context;
 
@@ -2137,6 +2151,7 @@ static int mana_create_page_pool(struct mana_rxq *rxq, struct gdma_context *gc)
 	pprm.pool_size = RX_BUFFERS_PER_QUEUE;
 	pprm.nid = gc->numa_node;
 	pprm.napi = &rxq->rx_cq.napi;
+	pprm.netdev = rxq->ndev;
 
 	rxq->page_pool = page_pool_create(&pprm);
 
@@ -2189,8 +2204,8 @@ static struct mana_rxq *mana_create_rxq(struct mana_port_context *apc,
 	if (err)
 		goto out;
 
-	rq_size = PAGE_ALIGN(rq_size);
-	cq_size = PAGE_ALIGN(cq_size);
+	rq_size = MANA_PAGE_ALIGN(rq_size);
+	cq_size = MANA_PAGE_ALIGN(cq_size);
 
 	/* Create RQ */
 	memset(&spec, 0, sizeof(spec));
@@ -2344,11 +2359,33 @@ static int mana_create_vport(struct mana_port_context *apc,
 	return mana_create_txq(apc, net);
 }
 
+static int mana_rss_table_alloc(struct mana_port_context *apc)
+{
+	if (!apc->indir_table_sz) {
+		netdev_err(apc->ndev,
+			   "Indirection table size not set for vPort %d\n",
+			   apc->port_idx);
+		return -EINVAL;
+	}
+
+	apc->indir_table = kcalloc(apc->indir_table_sz, sizeof(u32), GFP_KERNEL);
+	if (!apc->indir_table)
+		return -ENOMEM;
+
+	apc->rxobj_table = kcalloc(apc->indir_table_sz, sizeof(mana_handle_t), GFP_KERNEL);
+	if (!apc->rxobj_table) {
+		kfree(apc->indir_table);
+		return -ENOMEM;
+	}
+
+	return 0;
+}
+
 static void mana_rss_table_init(struct mana_port_context *apc)
 {
 	int i;
 
-	for (i = 0; i < MANA_INDIRECT_TABLE_SIZE; i++)
+	for (i = 0; i < apc->indir_table_sz; i++)
 		apc->indir_table[i] =
 			ethtool_rxfh_indir_default(i, apc->num_queues);
 }
@@ -2361,7 +2398,7 @@ int mana_config_rss(struct mana_port_context *apc, enum TRI_STATE rx,
 	int i;
 
 	if (update_tab) {
-		for (i = 0; i < MANA_INDIRECT_TABLE_SIZE; i++) {
+		for (i = 0; i < apc->indir_table_sz; i++) {
 			queue_idx = apc->indir_table[i];
 			apc->rxobj_table[i] = apc->rxqs[queue_idx]->rxobj;
 		}
@@ -2385,13 +2422,33 @@ void mana_query_gf_stats(struct mana_port_context *apc)
 
 	mana_gd_init_req_hdr(&req.hdr, MANA_QUERY_GF_STAT,
 			     sizeof(req), sizeof(resp));
-	req.req_stats = STATISTICS_FLAGS_HC_TX_BYTES |
+	req.req_stats = STATISTICS_FLAGS_RX_DISCARDS_NO_WQE |
+			STATISTICS_FLAGS_RX_ERRORS_VPORT_DISABLED |
+			STATISTICS_FLAGS_HC_RX_BYTES |
+			STATISTICS_FLAGS_HC_RX_UCAST_PACKETS |
+			STATISTICS_FLAGS_HC_RX_UCAST_BYTES |
+			STATISTICS_FLAGS_HC_RX_MCAST_PACKETS |
+			STATISTICS_FLAGS_HC_RX_MCAST_BYTES |
+			STATISTICS_FLAGS_HC_RX_BCAST_PACKETS |
+			STATISTICS_FLAGS_HC_RX_BCAST_BYTES |
+			STATISTICS_FLAGS_TX_ERRORS_GF_DISABLED |
+			STATISTICS_FLAGS_TX_ERRORS_VPORT_DISABLED |
+			STATISTICS_FLAGS_TX_ERRORS_INVAL_VPORT_OFFSET_PACKETS |
+			STATISTICS_FLAGS_TX_ERRORS_VLAN_ENFORCEMENT |
+			STATISTICS_FLAGS_TX_ERRORS_ETH_TYPE_ENFORCEMENT |
+			STATISTICS_FLAGS_TX_ERRORS_SA_ENFORCEMENT |
+			STATISTICS_FLAGS_TX_ERRORS_SQPDID_ENFORCEMENT |
+			STATISTICS_FLAGS_TX_ERRORS_CQPDID_ENFORCEMENT |
+			STATISTICS_FLAGS_TX_ERRORS_MTU_VIOLATION |
+			STATISTICS_FLAGS_TX_ERRORS_INVALID_OOB |
+			STATISTICS_FLAGS_HC_TX_BYTES |
 			STATISTICS_FLAGS_HC_TX_UCAST_PACKETS |
 			STATISTICS_FLAGS_HC_TX_UCAST_BYTES |
 			STATISTICS_FLAGS_HC_TX_MCAST_PACKETS |
 			STATISTICS_FLAGS_HC_TX_MCAST_BYTES |
 			STATISTICS_FLAGS_HC_TX_BCAST_PACKETS |
-			STATISTICS_FLAGS_HC_TX_BCAST_BYTES;
+			STATISTICS_FLAGS_HC_TX_BCAST_BYTES |
+			STATISTICS_FLAGS_TX_ERRORS_GDMA_ERROR;
 
 	err = mana_send_request(apc->ac, &req, sizeof(req), &resp,
 				sizeof(resp));
@@ -2407,6 +2464,30 @@ void mana_query_gf_stats(struct mana_port_context *apc)
 		return;
 	}
 
+	apc->eth_stats.hc_rx_discards_no_wqe = resp.rx_discards_nowqe;
+	apc->eth_stats.hc_rx_err_vport_disabled = resp.rx_err_vport_disabled;
+	apc->eth_stats.hc_rx_bytes = resp.hc_rx_bytes;
+	apc->eth_stats.hc_rx_ucast_pkts = resp.hc_rx_ucast_pkts;
+	apc->eth_stats.hc_rx_ucast_bytes = resp.hc_rx_ucast_bytes;
+	apc->eth_stats.hc_rx_bcast_pkts = resp.hc_rx_bcast_pkts;
+	apc->eth_stats.hc_rx_bcast_bytes = resp.hc_rx_bcast_bytes;
+	apc->eth_stats.hc_rx_mcast_pkts = resp.hc_rx_mcast_pkts;
+	apc->eth_stats.hc_rx_mcast_bytes = resp.hc_rx_mcast_bytes;
+	apc->eth_stats.hc_tx_err_gf_disabled = resp.tx_err_gf_disabled;
+	apc->eth_stats.hc_tx_err_vport_disabled = resp.tx_err_vport_disabled;
+	apc->eth_stats.hc_tx_err_inval_vportoffset_pkt =
+					     resp.tx_err_inval_vport_offset_pkt;
+	apc->eth_stats.hc_tx_err_vlan_enforcement =
+					     resp.tx_err_vlan_enforcement;
+	apc->eth_stats.hc_tx_err_eth_type_enforcement =
+					     resp.tx_err_ethtype_enforcement;
+	apc->eth_stats.hc_tx_err_sa_enforcement = resp.tx_err_SA_enforcement;
+	apc->eth_stats.hc_tx_err_sqpdid_enforcement =
+					     resp.tx_err_SQPDID_enforcement;
+	apc->eth_stats.hc_tx_err_cqpdid_enforcement =
+					     resp.tx_err_CQPDID_enforcement;
+	apc->eth_stats.hc_tx_err_mtu_violation = resp.tx_err_mtu_violation;
+	apc->eth_stats.hc_tx_err_inval_oob = resp.tx_err_inval_oob;
 	apc->eth_stats.hc_tx_bytes = resp.hc_tx_bytes;
 	apc->eth_stats.hc_tx_ucast_pkts = resp.hc_tx_ucast_pkts;
 	apc->eth_stats.hc_tx_ucast_bytes = resp.hc_tx_ucast_bytes;
@@ -2414,6 +2495,7 @@ void mana_query_gf_stats(struct mana_port_context *apc)
 	apc->eth_stats.hc_tx_bcast_bytes = resp.hc_tx_bcast_bytes;
 	apc->eth_stats.hc_tx_mcast_pkts = resp.hc_tx_mcast_pkts;
 	apc->eth_stats.hc_tx_mcast_bytes = resp.hc_tx_mcast_bytes;
+	apc->eth_stats.hc_tx_err_gdma = resp.tx_err_gdma;
 }
 
 static int mana_init_port(struct net_device *ndev)
@@ -2421,7 +2503,6 @@ static int mana_init_port(struct net_device *ndev)
 	struct mana_port_context *apc = netdev_priv(ndev);
 	u32 max_txq, max_rxq, max_queues;
 	int port_idx = apc->port_idx;
-	u32 num_indirect_entries;
 	int err;
 
 	err = mana_init_port_context(apc);
@@ -2429,7 +2510,7 @@ static int mana_init_port(struct net_device *ndev)
 		return err;
 
 	err = mana_query_vport_cfg(apc, port_idx, &max_txq, &max_rxq,
-				   &num_indirect_entries);
+				   &apc->indir_table_sz);
 	if (err) {
 		netdev_err(ndev, "Failed to query info for vPort %d\n",
 			   port_idx);
@@ -2448,8 +2529,7 @@ static int mana_init_port(struct net_device *ndev)
 	return 0;
 
 reset_apc:
-	kfree(apc->rxqs);
-	apc->rxqs = NULL;
+	mana_cleanup_port_context(apc);
 	return err;
 }
 
@@ -2678,6 +2758,10 @@ static int mana_probe_port(struct mana_context *ac, int port_idx,
 	if (err)
 		goto free_net;
 
+	err = mana_rss_table_alloc(apc);
+	if (err)
+		goto reset_apc;
+
 	netdev_lockdep_set_classes(ndev);
 
 	ndev->hw_features = NETIF_F_SG | NETIF_F_IP_CSUM | NETIF_F_IPV6_CSUM;
@@ -2687,20 +2771,22 @@ static int mana_probe_port(struct mana_context *ac, int port_idx,
 	ndev->features = ndev->hw_features | NETIF_F_HW_VLAN_CTAG_TX |
 			 NETIF_F_HW_VLAN_CTAG_RX;
 	ndev->vlan_features = ndev->features;
-	ndev->xdp_features = NETDEV_XDP_ACT_BASIC | NETDEV_XDP_ACT_REDIRECT |
-			     NETDEV_XDP_ACT_NDO_XMIT;
+	xdp_set_features_flag(ndev, NETDEV_XDP_ACT_BASIC |
+			      NETDEV_XDP_ACT_REDIRECT |
+			      NETDEV_XDP_ACT_NDO_XMIT);
 
 	err = register_netdev(ndev);
 	if (err) {
 		netdev_err(ndev, "Unable to register netdev.\n");
-		goto reset_apc;
+		goto free_indir;
 	}
 
 	return 0;
 
+free_indir:
+	mana_cleanup_indir_table(apc);
 reset_apc:
-	kfree(apc->rxqs);
-	apc->rxqs = NULL;
+	mana_cleanup_port_context(apc);
 free_net:
 	*ndev_storage = NULL;
 	netdev_err(ndev, "Failed to probe vPort %d: %d\n", port_idx, err);
@@ -2752,6 +2838,8 @@ static int add_adev(struct gdma_dev *gd)
 	if (ret)
 		goto init_fail;
 
+	/* madev is owned by the auxiliary device */
+	madev = NULL;
 	ret = auxiliary_device_add(adev);
 	if (ret)
 		goto add_fail;
@@ -2826,16 +2914,30 @@ int mana_probe(struct gdma_dev *gd, bool resuming)
 	if (!resuming) {
 		for (i = 0; i < ac->num_ports; i++) {
 			err = mana_probe_port(ac, i, &ac->ports[i]);
-			if (err)
+			/* we log the port for which the probe failed and stop
+			 * probes for subsequent ports.
+			 * Note that we keep running ports, for which the probes
+			 * were successful, unless add_adev fails too
+			 */
+			if (err) {
+				dev_err(dev, "Probe Failed for port %d\n", i);
 				break;
+			}
 		}
 	} else {
 		for (i = 0; i < ac->num_ports; i++) {
 			rtnl_lock();
 			err = mana_attach(ac->ports[i]);
 			rtnl_unlock();
-			if (err)
+			/* we log the port for which the attach failed and stop
+			 * attach for subsequent ports
+			 * Note that we keep running ports, for which the attach
+			 * were successful, unless add_adev fails too
+			 */
+			if (err) {
+				dev_err(dev, "Attach Failed for port %d\n", i);
 				break;
+			}
 		}
 	}
 
@@ -2851,6 +2953,7 @@ void mana_remove(struct gdma_dev *gd, bool suspending)
 {
 	struct gdma_context *gc = gd->gdma_context;
 	struct mana_context *ac = gd->driver_data;
+	struct mana_port_context *apc;
 	struct device *dev = gc->dev;
 	struct net_device *ndev;
 	int err;
@@ -2862,6 +2965,7 @@ void mana_remove(struct gdma_dev *gd, bool suspending)
 
 	for (i = 0; i < ac->num_ports; i++) {
 		ndev = ac->ports[i];
+		apc = netdev_priv(ndev);
 		if (!ndev) {
 			if (i == 0)
 				dev_err(dev, "No net device to remove\n");
@@ -2885,6 +2989,7 @@ void mana_remove(struct gdma_dev *gd, bool suspending)
 		}
 
 		unregister_netdevice(ndev);
+		mana_cleanup_indir_table(apc);
 
 		rtnl_unlock();
 
@@ -2902,3 +3007,22 @@ out:
 	gd->gdma_context = NULL;
 	kfree(ac);
 }
+
+struct net_device *mana_get_primary_netdev_rcu(struct mana_context *ac, u32 port_index)
+{
+	struct net_device *ndev;
+
+	RCU_LOCKDEP_WARN(!rcu_read_lock_held(),
+			 "Taking primary netdev without holding the RCU read lock");
+	if (port_index >= ac->num_ports)
+		return NULL;
+
+	/* When mana is used in netvsc, the upper netdevice should be returned. */
+	if (ac->ports[port_index]->flags & IFF_SLAVE)
+		ndev = netdev_master_upper_dev_get_rcu(ac->ports[port_index]);
+	else
+		ndev = ac->ports[port_index];
+
+	return ndev;
+}
+EXPORT_SYMBOL_NS(mana_get_primary_netdev_rcu, NET_MANA);
