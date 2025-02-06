@@ -1020,6 +1020,8 @@ static inline ktime_t tick_get_next_period(void)
 
 /**
  * tick_broadcast_setup_oneshot - setup the broadcast device
+ * @bc: the broadcast device
+ * @from_periodic: true if called from periodic mode
  */
 static void tick_broadcast_setup_oneshot(struct clock_event_device *bc,
 					 bool from_periodic)
@@ -1141,7 +1143,6 @@ void tick_broadcast_switch_to_oneshot(void)
 #ifdef CONFIG_HOTPLUG_CPU
 void hotplug_cpu__broadcast_tick_pull(int deadcpu)
 {
-	struct tick_device *td = this_cpu_ptr(&tick_cpu_device);
 	struct clock_event_device *bc;
 	unsigned long flags;
 
@@ -1167,6 +1168,8 @@ void hotplug_cpu__broadcast_tick_pull(int deadcpu)
 		 * device to avoid the starvation.
 		 */
 		if (tick_check_broadcast_expired()) {
+			struct tick_device *td = this_cpu_ptr(&tick_cpu_device);
+
 			cpumask_clear_cpu(smp_processor_id(), tick_broadcast_force_mask);
 			tick_program_event(td->evtdev->next_event, 1);
 		}

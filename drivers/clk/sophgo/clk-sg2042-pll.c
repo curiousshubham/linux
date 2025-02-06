@@ -153,7 +153,7 @@ static unsigned long sg2042_pll_recalc_rate(unsigned int reg_value,
 
 	sg2042_pll_ctrl_decode(reg_value, &ctrl_table);
 
-	numerator = parent_rate * ctrl_table.fbdiv;
+	numerator = (u64)parent_rate * ctrl_table.fbdiv;
 	denominator = ctrl_table.refdiv * ctrl_table.postdiv1 * ctrl_table.postdiv2;
 	do_div(numerator, denominator);
 	return numerator;
@@ -387,7 +387,7 @@ static int sg2042_clk_pll_set_rate(struct clk_hw *hw,
 	struct sg2042_pll_clock *pll = to_sg2042_pll_clk(hw);
 	struct sg2042_pll_ctrl pctrl_table;
 	unsigned long flags;
-	u32 value;
+	u32 value = 0;
 	int ret;
 
 	spin_lock_irqsave(pll->lock, flags);

@@ -69,6 +69,9 @@
 #define SMU_14_0_0_UMD_PSTATE_SOCCLK			678
 #define SMU_14_0_0_UMD_PSTATE_FCLK			1800
 
+#define SMU_14_0_4_UMD_PSTATE_GFXCLK			938
+#define SMU_14_0_4_UMD_PSTATE_SOCCLK			938
+
 #define FEATURE_MASK(feature) (1ULL << feature)
 #define SMC_DPM_FEATURE ( \
 	FEATURE_MASK(FEATURE_CCLK_DPM_BIT) | \
@@ -1129,7 +1132,7 @@ static int smu_v14_0_common_get_dpm_level_count(struct smu_context *smu,
 static int smu_v14_0_0_print_clk_levels(struct smu_context *smu,
 					enum smu_clk_type clk_type, char *buf)
 {
-	int i, size = 0, ret = 0;
+	int i, idx, ret = 0, size = 0;
 	uint32_t cur_value = 0, value = 0, count = 0;
 	uint32_t min, max;
 
@@ -1165,7 +1168,8 @@ static int smu_v14_0_0_print_clk_levels(struct smu_context *smu,
 			break;
 
 		for (i = 0; i < count; i++) {
-			ret = smu_v14_0_common_get_dpm_freq_by_index(smu, clk_type, i, &value);
+			idx = (clk_type == SMU_MCLK) ? (count - i - 1) : i;
+			ret = smu_v14_0_common_get_dpm_freq_by_index(smu, clk_type, idx, &value);
 			if (ret)
 				break;
 
@@ -1296,19 +1300,28 @@ static int smu_v14_0_common_get_dpm_profile_freq(struct smu_context *smu,
 	switch (clk_type) {
 	case SMU_GFXCLK:
 	case SMU_SCLK:
-		clk_limit = SMU_14_0_0_UMD_PSTATE_GFXCLK;
+		if (amdgpu_ip_version(smu->adev, MP1_HWIP, 0) == IP_VERSION(14, 0, 4))
+			clk_limit = SMU_14_0_4_UMD_PSTATE_GFXCLK;
+		else
+			clk_limit = SMU_14_0_0_UMD_PSTATE_GFXCLK;
 		if (level == AMD_DPM_FORCED_LEVEL_PROFILE_PEAK)
 			smu_v14_0_common_get_dpm_ultimate_freq(smu, SMU_SCLK, NULL, &clk_limit);
 		else if (level == AMD_DPM_FORCED_LEVEL_PROFILE_MIN_SCLK)
 			smu_v14_0_common_get_dpm_ultimate_freq(smu, SMU_SCLK, &clk_limit, NULL);
 		break;
 	case SMU_SOCCLK:
-		clk_limit = SMU_14_0_0_UMD_PSTATE_SOCCLK;
+		if (amdgpu_ip_version(smu->adev, MP1_HWIP, 0) == IP_VERSION(14, 0, 4))
+			clk_limit = SMU_14_0_4_UMD_PSTATE_SOCCLK;
+		else
+			clk_limit = SMU_14_0_0_UMD_PSTATE_SOCCLK;
 		if (level == AMD_DPM_FORCED_LEVEL_PROFILE_PEAK)
 			smu_v14_0_common_get_dpm_ultimate_freq(smu, SMU_SOCCLK, NULL, &clk_limit);
 		break;
 	case SMU_FCLK:
-		clk_limit = SMU_14_0_0_UMD_PSTATE_FCLK;
+		if (amdgpu_ip_version(smu->adev, MP1_HWIP, 0) == IP_VERSION(14, 0, 4))
+			smu_v14_0_common_get_dpm_ultimate_freq(smu, SMU_FCLK, NULL, &clk_limit);
+		else
+			clk_limit = SMU_14_0_0_UMD_PSTATE_FCLK;
 		if (level == AMD_DPM_FORCED_LEVEL_PROFILE_PEAK)
 			smu_v14_0_common_get_dpm_ultimate_freq(smu, SMU_FCLK, NULL, &clk_limit);
 		else if (level == AMD_DPM_FORCED_LEVEL_PROFILE_MIN_MCLK)

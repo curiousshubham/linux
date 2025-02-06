@@ -50,7 +50,7 @@
 
 #define AMDGPU_DM_MAX_NUM_EDP 2
 
-#define AMDGPU_DMUB_NOTIFICATION_MAX 6
+#define AMDGPU_DMUB_NOTIFICATION_MAX 7
 
 #define HDMI_AMD_VENDOR_SPECIFIC_DATA_BLOCK_IEEE_REGISTRATION_ID 0x00001A
 #define AMD_VSDB_VERSION_3_FEATURECAP_REPLAYMODE 0x40
@@ -137,6 +137,13 @@ struct vblank_control_work {
 	bool enable;
 };
 
+/**
+ * struct idle_workqueue - Work data for periodic action in idle
+ * @work: Kernel work data for the work event
+ * @dm: amdgpu display manager device
+ * @enable: true if idle worker is enabled
+ * @running: true if idle worker is running
+ */
 struct idle_workqueue {
 	struct work_struct work;
 	struct amdgpu_display_manager *dm;
@@ -502,6 +509,12 @@ struct amdgpu_display_manager {
 	 * Deferred work for vblank control events.
 	 */
 	struct workqueue_struct *vblank_control_workqueue;
+
+	/**
+	 * @idle_workqueue:
+	 *
+	 * Periodic work for idle events.
+	 */
 	struct idle_workqueue *idle_workqueue;
 
 	struct drm_atomic_state *cached_state;
@@ -528,12 +541,12 @@ struct amdgpu_display_manager {
 
 #if defined(CONFIG_DRM_AMD_SECURE_DISPLAY)
 	/**
-	 * @secure_display_ctxs:
+	 * @secure_display_ctx:
 	 *
-	 * Store the ROI information and the work_struct to command dmub and psp for
-	 * all crtcs.
+	 * Store secure display relevant info. e.g. the ROI information
+	 * , the work_struct to command dmub, etc.
 	 */
-	struct secure_display_context *secure_display_ctxs;
+	struct secure_display_context secure_display_ctx;
 #endif
 	/**
 	 * @hpd_rx_offload_wq:
@@ -587,7 +600,9 @@ struct amdgpu_display_manager {
 	 */
 	struct mutex dpia_aux_lock;
 
-	/*
+	/**
+	 * @bb_from_dmub:
+	 *
 	 * Bounding box data read from dmub during early initialization for DCN4+
 	 */
 	struct dml2_soc_bb *bb_from_dmub;
@@ -656,9 +671,11 @@ struct amdgpu_dm_connector {
 	uint32_t connector_id;
 	int bl_idx;
 
+	struct cec_notifier *notifier;
+
 	/* we need to mind the EDID between detect
 	   and get modes due to analog/digital/tvencoder */
-	struct edid *edid;
+	const struct drm_edid *drm_edid;
 
 	/* shared with amdgpu */
 	struct amdgpu_hpd hpd;
@@ -682,6 +699,8 @@ struct amdgpu_dm_connector {
 	struct drm_dp_mst_port *mst_output_port;
 	struct amdgpu_dm_connector *mst_root;
 	struct drm_dp_aux *dsc_aux;
+	uint32_t mst_local_bw;
+	uint16_t vc_full_pbn;
 	struct mutex handle_mst_msg_ready;
 
 	/* TODO see if we can merge with ddc_bus or make a dm_connector */
@@ -712,7 +731,7 @@ struct amdgpu_dm_connector {
 	/* Cached display modes */
 	struct drm_display_mode freesync_vid_base;
 
-	int psr_skip_count;
+	int sr_skip_count;
 	bool disallow_edp_enter_psr;
 
 	/* Record progress status of mst*/
@@ -936,7 +955,7 @@ void dm_restore_drm_connector_state(struct drm_device *dev,
 				    struct drm_connector *connector);
 
 void amdgpu_dm_update_freesync_caps(struct drm_connector *connector,
-					struct edid *edid);
+				    const struct drm_edid *drm_edid);
 
 void amdgpu_dm_trigger_timing_sync(struct drm_device *dev);
 
@@ -989,7 +1008,14 @@ void *dm_allocate_gpu_mem(struct amdgpu_device *adev,
 						  enum dc_gpu_mem_alloc_type type,
 						  size_t size,
 						  long long *addr);
+void dm_free_gpu_mem(struct amdgpu_device *adev,
+						  enum dc_gpu_mem_alloc_type type,
+						  void *addr);
 
 bool amdgpu_dm_is_headless(struct amdgpu_device *adev);
+
+void hdmi_cec_set_edid(struct amdgpu_dm_connector *aconnector);
+void hdmi_cec_unset_edid(struct amdgpu_dm_connector *aconnector);
+int amdgpu_dm_initialize_hdmi_connector(struct amdgpu_dm_connector *aconnector);
 
 #endif /* __AMDGPU_DM_H__ */
